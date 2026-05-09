@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Transcript Summarizer",
+  "version": "1.0",
+  "description": "Summarizes YouTube video transcripts on demand.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "commands"
+  ],
+  "host_permissions": [
+    "https://*.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["modal.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "summarize-video": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+1",
+        "mac": "Command+Shift+1"
+      },
+      "description": "Summarize YouTube Video Transcript"
+    }
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_icon": {}
+  }
+}
