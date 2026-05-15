@@ -50,10 +50,22 @@
 
 #youtube-transcript-summarizer-modal .summary-text {
   color: #555;
-  font-size: 1.5em; /* Increased font size for better readability */
+  font-size: 1.5em;
   line-height: 1.6;
-  white-space: pre-wrap; /* Preserve line breaks from the summary */
-  word-wrap: break-word; /* Break long words to prevent overflow */
+  word-wrap: break-word;
+}
+
+#youtube-transcript-summarizer-modal .summary-text p {
+  margin: 0 0 10px;
+}
+
+#youtube-transcript-summarizer-modal .summary-text ul {
+  margin: 8px 0 0;
+  padding-left: 1.4em;
+}
+
+#youtube-transcript-summarizer-modal .summary-text li {
+  margin-bottom: 6px;
 }
 
 /* Styling for header to prevent text selection during drag */

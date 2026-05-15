@@ -54,7 +54,16 @@ async function summarizeTranscript(transcriptText) {
     throw new Error("OpenRouter API key not set. Please set it in the extension's options.");
   }
 
-  const prompt = `Summarize the following YouTube video transcript concisely. Focus on the main points and key takeaways. Return at max 3 paragraphs or 15 sentences. Prefer short bulletpoint format.\n\nTranscript:\n"${transcriptText}"`;
+  const prompt = `Summarize the following YouTube video transcript. Structure your response exactly like this:
+
+1. A single short paragraph (2-3 sentences max) giving the overall gist.
+2. A blank line.
+3. 5-8 bullet points (using "- ") covering the main arguments, findings, or takeaways. Each bullet should be one concise sentence.
+
+No headers, no extra commentary, just the paragraph then the bullets.
+
+Transcript:
+"${transcriptText}"`;
 
   try {
     const response = await fetch(OPENROUTER_API_URL, {
@@ -84,6 +93,30 @@ async function summarizeTranscript(transcriptText) {
   }
 }
 
+function renderMarkdown(text) {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lines = escaped.split('\n');
+  const html = [];
+  let inList = false;
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^- /.test(line)) {
+      if (!inList) { html.push('<ul>'); inList = true; }
+      html.push(`<li>${line.slice(2).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')}</li>`);
+    } else {
+      if (inList) { html.push('</ul>'); inList = false; }
+      if (line === '') {
+        html.push('<br>');
+      } else {
+        html.push(`<p>${line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')}</p>`);
+      }
+    }
+  }
+  if (inList) html.push('</ul>');
+  return html.join('');
+}
+
 // Function to create and display the summary modal
 function displaySummaryModal(summary) {
   console.log("Displaying summary modal...");
@@ -97,7 +130,7 @@ function displaySummaryModal(summary) {
     <div class="modal-content">
       <span class="close-button">&times;</span>
       <h2>Video Summary</h2>
-      <div class="summary-text">${summary}</div>
+      <div class="summary-text">${renderMarkdown(summary)}</div>
     </div>
   `;
 
