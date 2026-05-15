@@ -58,7 +58,7 @@ async function summarizeTranscript(transcriptText) {
 
 1. A single short paragraph (2-3 sentences max) giving the overall gist.
 2. A blank line.
-3. 5-8 bullet points (using "- ") covering the main arguments, findings, or takeaways. Each bullet should be one concise sentence.
+3. 5-8 bullet points (using "- ") covering the main arguments, findings, or takeaways. Each bullet should be one concise sentence. Bold the key term or phrase in each bullet using **bold**.
 
 No headers, no extra commentary, just the paragraph then the bullets.
 
