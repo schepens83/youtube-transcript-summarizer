@@ -1,0 +1,13 @@
+{
+  "name": "youtube-transcript-dom-canary",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live YouTube transcript DOM selector verifier for youtube-transcript-summarizer.",
+  "scripts": {
+    "verify": "node verify-selector.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.52.0"
+  }
+}
