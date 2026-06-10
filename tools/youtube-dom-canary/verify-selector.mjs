@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import https from 'node:https';
 import path from 'node:path';
 
 const DEFAULT_VIDEO_URL = 'https://www.youtube.com/watch?v=Ks-_Mh1QhMc';
@@ -15,17 +16,25 @@ const EXIT_SELECTOR_BROKEN = 1;
 const EXIT_PANEL_NOT_OPENED = 2;
 const EXIT_BROWSER_FAILURE = 3;
 
-const videoUrl = normalizeWatchUrl(process.argv[2] || process.env.VIDEO_URL || DEFAULT_VIDEO_URL);
+const args = process.argv.slice(2);
+const doctorMode = args.includes('--doctor');
+const requestedVideoUrl = args.find(arg => !arg.startsWith('--'));
+const videoUrl = normalizeWatchUrl(requestedVideoUrl || process.env.VIDEO_URL || DEFAULT_VIDEO_URL);
 const headless = process.env.HEADLESS !== 'false';
 
 main().catch(error => {
-  console.error('[browser-failure]', error?.message || error);
+  reportBrowserFailure(error?.category || categorizeFailure(error), error?.message || String(error));
   process.exit(EXIT_BROWSER_FAILURE);
 });
 
 async function main() {
   const transcriptSelector = await readTranscriptSelector();
-  const browser = await chromium.launch({ headless });
+  if (doctorMode) {
+    await runDoctor(transcriptSelector);
+    return;
+  }
+
+  const browser = await launchBrowser();
   const context = await browser.newContext({
     locale: 'en-US',
     viewport: { width: 1365, height: 900 },
@@ -40,14 +49,14 @@ async function main() {
   try {
     console.log(`[open] ${videoUrl}`);
     console.log(`[selector] ${transcriptSelector}`);
-    await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await navigateToVideo(page);
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
 
     await dismissConsentDialog(page);
 
-    const blocked = await looksBlocked(page);
-    if (blocked) {
-      console.error('[browser-failure] YouTube showed a bot check, consent wall, or unavailable page.');
+    const blockReason = await blockedPageReason(page);
+    if (blockReason) {
+      reportBrowserFailure(blockReason, youtubeBlockMessage(blockReason));
       process.exitCode = EXIT_BROWSER_FAILURE;
       return;
     }
@@ -82,6 +91,39 @@ async function main() {
     process.exitCode = EXIT_SELECTOR_BROKEN;
   } finally {
     await browser.close();
+  }
+}
+
+async function runDoctor(transcriptSelector) {
+  console.log(`[selector] ${transcriptSelector}`);
+  console.log('[doctor] checking Chromium launch');
+  const browser = await launchBrowser();
+  const page = await browser.newPage();
+  await page.goto('about:blank');
+  await browser.close();
+  console.log('[doctor] Chromium launch ok');
+
+  console.log('[doctor] checking outbound HTTPS to YouTube');
+  await checkYoutubeHttps();
+  console.log('[doctor] YouTube HTTPS ok');
+  console.log('[doctor] sandbox can run the canary');
+}
+
+async function launchBrowser() {
+  try {
+    return await chromium.launch({ headless });
+  } catch (error) {
+    reportBrowserFailure(categorizeFailure(error), error?.message || String(error));
+    process.exit(EXIT_BROWSER_FAILURE);
+  }
+}
+
+async function navigateToVideo(page) {
+  try {
+    await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  } catch (error) {
+    reportBrowserFailure(categorizeNavigationFailure(error), error?.message || String(error));
+    process.exit(EXIT_BROWSER_FAILURE);
   }
 }
 
@@ -138,9 +180,18 @@ async function dismissConsentDialog(page) {
   }
 }
 
-async function looksBlocked(page) {
+async function blockedPageReason(page) {
   const bodyText = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
-  return /sign in to confirm|unusual traffic|not a bot|captcha|video unavailable/i.test(bodyText);
+  if (/before you continue to youtube|accept all|reject all|manage options/i.test(bodyText)) {
+    return 'consent-wall';
+  }
+  if (/sign in to confirm|unusual traffic|not a bot|captcha/i.test(bodyText)) {
+    return 'youtube-blocked';
+  }
+  if (/video unavailable/i.test(bodyText)) {
+    return 'youtube-video-unavailable';
+  }
+  return null;
 }
 
 async function openTranscriptPanel(page) {
@@ -294,4 +345,66 @@ async function printTranscriptDomHints(page) {
 
 async function isVisible(locator) {
   return locator.isVisible({ timeout: 1_000 }).catch(() => false);
+}
+
+function checkYoutubeHttps() {
+  return new Promise((resolve, reject) => {
+    const request = https.get('https://www.youtube.com/generate_204', { timeout: 10_000 }, response => {
+      response.resume();
+      response.on('end', resolve);
+    });
+
+    request.on('timeout', () => {
+      request.destroy(new Error('Timed out reaching https://www.youtube.com/generate_204'));
+    });
+
+    request.on('error', error => {
+      error.category = 'network-failed';
+      reject(error);
+    });
+  });
+}
+
+function categorizeFailure(error) {
+  const message = error?.message || String(error);
+  if (/missing dependencies|install-deps|lib[^/\s]+\.so|error while loading shared libraries/i.test(message)) {
+    return 'browser-deps-missing';
+  }
+  return 'browser-launch-failed';
+}
+
+function categorizeNavigationFailure(error) {
+  const message = error?.message || String(error);
+  if (/timeout/i.test(message)) {
+    return 'navigation-timeout';
+  }
+  if (/net::|ERR_|ENOTFOUND|ECONN|ETIMEDOUT|EAI_AGAIN/i.test(message)) {
+    return 'network-failed';
+  }
+  return 'navigation-failed';
+}
+
+function youtubeBlockMessage(category) {
+  if (category === 'consent-wall') {
+    return 'YouTube showed a consent wall that the canary could not dismiss.';
+  }
+  if (category === 'youtube-video-unavailable') {
+    return 'YouTube reported that the selected video is unavailable.';
+  }
+  return 'YouTube showed a bot check, unusual-traffic page, or sign-in gate.';
+}
+
+function reportBrowserFailure(category, message) {
+  console.error(`[${category}] ${message}`);
+
+  if (category === 'browser-deps-missing') {
+    console.error('Install Playwright browser dependencies with:');
+    console.error('  sudo npx playwright install-deps chromium');
+  }
+
+  if (category === 'network-failed') {
+    console.error('Verify that the sandbox allows outbound HTTPS to youtube.com.');
+  }
+
+  console.error('No selector conclusion was reached.');
 }

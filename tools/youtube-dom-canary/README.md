@@ -61,9 +61,17 @@ Suggested first-time setup:
 
 ```bash
 cd /path/to/youtube-transcript-summarizer/tools/youtube-dom-canary
-npm ci || npm install
+npm install --no-package-lock
 npx playwright install chromium
 ```
+
+Run the environment preflight after setup:
+
+```bash
+npm run doctor
+```
+
+`doctor` checks that the selector can be read from `content.js`, Chromium can launch, and the sandbox can reach YouTube over HTTPS.
 
 Suggested scheduled command:
 
@@ -80,6 +88,8 @@ For cron, capture output and alert only on non-zero exit:
 
 Do not run the whole extension in the scheduled sandbox. This canary only needs public YouTube DOM access and does not need the OpenRouter API path, extension storage, modal code, background worker, or manifest.
 
+This tool intentionally ignores `package-lock.json` so sandbox setup does not create repo churn. If this tool ever needs pinned dependency reproducibility, remove that ignore rule and commit the lockfile deliberately.
+
 ## Maintenance Routine
 
 When the scheduled canary reports:
@@ -87,6 +97,16 @@ When the scheduled canary reports:
 - `0`: make no repo changes. Report the live video title and segment count from the output.
 - `1`: YouTube likely renamed transcript DOM elements or classes. Inspect the printed `transcript-dom-hints`, update only the DOM-extraction selector logic inside `fetchTranscript()` in `../../content.js`, rerun this canary, then commit and push to `main`.
 - `2`: the transcript panel button, transcript location, or chosen video may have changed. Report that as a panel-opening failure. Do not add automatic panel-opening behavior to the extension without explicit approval.
-- `3`: treat it as an environmental browser/navigation/consent/bot-check failure. Retry before changing code.
+- `3`: read the bracketed category, fix the environment or retry, and do not change extension code.
+
+Exit code `3` categories include:
+
+- `browser-deps-missing`: Chromium could not launch because shared libraries are missing. Run `sudo npx playwright install-deps chromium` in the sandbox image or install the equivalent distro packages.
+- `browser-launch-failed`: Chromium failed before navigation for a non-dependency reason. Check sandbox permissions, executable paths, and Playwright browser installation.
+- `network-failed`: the sandbox could not reach YouTube over HTTPS. Check egress, DNS, proxy, and firewall policy.
+- `navigation-timeout`: YouTube did not finish initial page navigation within the timeout. Retry before changing code.
+- `consent-wall`: YouTube showed a consent screen that the canary could not dismiss.
+- `youtube-blocked`: YouTube showed a bot check, unusual-traffic page, or sign-in gate.
+- `youtube-video-unavailable`: the configured video is unavailable. Use a different transcript-bearing video URL.
 
 If a selector fix is needed, keep `fetchTranscript()` returning one plain-text transcript string and keep the existing retry behavior unless the live DOM change requires otherwise. Do not modify the OpenRouter call, prompt text, modal, manifest, options page, or background worker as part of selector maintenance.
