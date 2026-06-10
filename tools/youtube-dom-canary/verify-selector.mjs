@@ -1,9 +1,15 @@
 import { chromium } from 'playwright';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 const DEFAULT_VIDEO_URL = 'https://www.youtube.com/watch?v=Ks-_Mh1QhMc';
-const TRANSCRIPT_SELECTOR = 'ytd-transcript-segment-renderer .segment-text';
 const MAX_RETRIES = 10;
 const RETRY_DELAY_MS = 500;
+const CONTENT_SCRIPT_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../content.js',
+);
 
 const EXIT_SELECTOR_BROKEN = 1;
 const EXIT_PANEL_NOT_OPENED = 2;
@@ -18,6 +24,7 @@ main().catch(error => {
 });
 
 async function main() {
+  const transcriptSelector = await readTranscriptSelector();
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({
     locale: 'en-US',
@@ -32,6 +39,7 @@ async function main() {
 
   try {
     console.log(`[open] ${videoUrl}`);
+    console.log(`[selector] ${transcriptSelector}`);
     await page.goto(videoUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
 
@@ -60,20 +68,34 @@ async function main() {
       return;
     }
 
-    const result = await queryTranscriptSegments(page);
+    const result = await queryTranscriptSegments(page, transcriptSelector);
     if (result.count > 0) {
-      console.log(`[ok] selector "${TRANSCRIPT_SELECTOR}" returned ${result.count} segments.`);
+      console.log(`[video] ${await videoTitle(page)}`);
+      console.log(`[ok] selector "${transcriptSelector}" returned ${result.count} segments.`);
       console.log(`[sample] ${result.sample.join(' | ')}`);
       process.exitCode = 0;
       return;
     }
 
-    console.error(`[selector-broken] Transcript panel opened, but "${TRANSCRIPT_SELECTOR}" returned 0 segments.`);
+    console.error(`[selector-broken] Transcript panel opened, but "${transcriptSelector}" returned 0 segments.`);
     await printTranscriptDomHints(page);
     process.exitCode = EXIT_SELECTOR_BROKEN;
   } finally {
     await browser.close();
   }
+}
+
+async function readTranscriptSelector() {
+  const source = await readFile(CONTENT_SCRIPT_PATH, 'utf8');
+  const querySelectorAllCalls = [...source.matchAll(/querySelectorAll\((['"`])([^'"`]+)\1\)/g)];
+
+  if (querySelectorAllCalls.length !== 1) {
+    throw new Error(
+      `Expected exactly one querySelectorAll(...) call in ${CONTENT_SCRIPT_PATH}, found ${querySelectorAllCalls.length}.`,
+    );
+  }
+
+  return querySelectorAllCalls[0][2];
 }
 
 function normalizeWatchUrl(rawUrl) {
@@ -200,7 +222,7 @@ async function waitForTranscriptPanel(page) {
   return page.locator(panelSelector).count().then(count => count > 0);
 }
 
-async function queryTranscriptSegments(page) {
+async function queryTranscriptSegments(page, selector) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
     const result = await page.evaluate(selector => {
       const segments = [...document.querySelectorAll(selector)];
@@ -208,7 +230,7 @@ async function queryTranscriptSegments(page) {
         count: segments.length,
         sample: segments.slice(0, 3).map(segment => segment.textContent.trim()).filter(Boolean),
       };
-    }, TRANSCRIPT_SELECTOR);
+    }, selector);
 
     if (result.count > 0 || attempt === MAX_RETRIES) {
       return result;
@@ -218,6 +240,12 @@ async function queryTranscriptSegments(page) {
   }
 
   return { count: 0, sample: [] };
+}
+
+async function videoTitle(page) {
+  return page.locator('h1 yt-formatted-string, h1.title').first()
+    .innerText({ timeout: 3_000 })
+    .catch(() => page.title());
 }
 
 async function printVisibleButtonHints(page) {
