@@ -69,6 +69,13 @@ async function main() {
       return;
     }
 
+    const postOpenBlockReason = await blockedPageReason(page);
+    if (postOpenBlockReason) {
+      reportBrowserFailure(postOpenBlockReason, youtubeBlockMessage(postOpenBlockReason));
+      process.exitCode = EXIT_BROWSER_FAILURE;
+      return;
+    }
+
     const panelVisible = await waitForTranscriptPanel(page);
     if (!panelVisible) {
       console.error('[panel-not-opened] Clicked a transcript control, but no transcript panel was detected.');
@@ -83,6 +90,13 @@ async function main() {
       console.log(`[ok] selector "${transcriptSelector}" returned ${result.count} segments.`);
       console.log(`[sample] ${result.sample.join(' | ')}`);
       process.exitCode = 0;
+      return;
+    }
+
+    const postQueryBlockReason = await blockedPageReason(page);
+    if (postQueryBlockReason) {
+      reportBrowserFailure(postQueryBlockReason, youtubeBlockMessage(postQueryBlockReason));
+      process.exitCode = EXIT_BROWSER_FAILURE;
       return;
     }
 
