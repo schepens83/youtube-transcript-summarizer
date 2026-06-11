@@ -126,7 +126,7 @@ When the scheduled canary reports:
 
 - `0`: make no repo changes. Report the live video title and segment count from the output.
 - `1`: YouTube likely renamed transcript DOM elements or classes. Inspect the printed `transcript-dom-hints`, update only the DOM-extraction selector logic inside `fetchTranscript()` in `../../content.js`, rerun this canary, then commit and push to `main`.
-- `2`: the transcript panel button, transcript location, or chosen video may have changed. Report that as a panel-opening failure. Do not add automatic panel-opening behavior to the extension without explicit approval.
+- `2`: the transcript panel button, transcript location, or chosen video may have changed. Inspect the canary's panel-opening helpers and the matching transcript-opening logic in `../../content.js`.
 - `3`: read the bracketed category, fix the environment or retry, and do not change extension code.
 
 Exit code `3` categories include:

@@ -17,32 +17,133 @@ async function getApiKey() {
 async function fetchTranscript() {
   console.log("Attempting to fetch transcript from DOM...");
 
-  return new Promise((resolve, reject) => {
-    const maxRetries = 10; // Try for 5 seconds (10 retries * 500ms)
-    let retries = 0;
+  const existingTranscript = await waitForTranscriptText(1);
+  if (existingTranscript) {
+    return existingTranscript;
+  }
 
-    const extractText = () => {
-      // Support both the older Polymer transcript DOM and YouTube's newer view-model transcript DOM.
-      const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer .segment-text, transcript-segment-view-model span[role=text]');
+  const opened = await openTranscriptPanel();
+  if (!opened) {
+    throw new Error('Could not find or click the "Show transcript" control.');
+  }
 
-      if (transcriptSegments.length > 0) {
-        let fullTranscript = "";
-        transcriptSegments.forEach(segment => {
-          fullTranscript += segment.textContent.trim() + " ";
-        });
-        console.log(`Successfully extracted ${transcriptSegments.length} transcript segments from DOM.`);
-        resolve(fullTranscript.trim());
-      } else if (retries < maxRetries) {
-        // If not found yet, wait a bit and check again.
-        retries++;
-        setTimeout(extractText, 500); // Wait 500ms before retrying
-      } else {
-        reject("Transcript segments not found in DOM after multiple attempts.");
-      }
-    };
+  const transcriptText = await waitForTranscriptText(10);
+  if (!transcriptText) {
+    throw new Error("Transcript segments not found in DOM after multiple attempts.");
+  }
 
-    extractText(); // Start the extraction process
+  return transcriptText;
+}
+
+function extractTranscriptText() {
+  // Support both the older Polymer transcript DOM and YouTube's newer view-model transcript DOM.
+  const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer .segment-text, transcript-segment-view-model span[role=text]');
+
+  if (transcriptSegments.length === 0) {
+    return "";
+  }
+
+  const transcriptText = [...transcriptSegments]
+    .map(segment => segment.textContent.trim())
+    .filter(Boolean)
+    .join(" ");
+
+  console.log(`Successfully extracted ${transcriptSegments.length} transcript segments from DOM.`);
+  return transcriptText;
+}
+
+async function waitForTranscriptText(maxAttempts) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const transcriptText = extractTranscriptText();
+    if (transcriptText) {
+      return transcriptText;
+    }
+
+    if (attempt < maxAttempts) {
+      await delay(500);
+    }
+  }
+
+  return "";
+}
+
+async function openTranscriptPanel() {
+  if (await clickShowTranscriptControl()) {
+    return true;
+  }
+
+  await expandDescription();
+
+  return clickShowTranscriptControl();
+}
+
+async function expandDescription() {
+  const selectors = [
+    'tp-yt-paper-button#expand',
+    'ytd-text-inline-expander tp-yt-paper-button#expand',
+    '#description-inline-expander button',
+  ];
+
+  for (const selector of selectors) {
+    const control = document.querySelector(selector);
+    if (isVisibleElement(control)) {
+      control.click();
+      await delay(500);
+      return;
+    }
+  }
+
+  const moreButton = findVisibleElementByText(document.getElementsByTagName('button'), /^more$/i);
+  if (moreButton) {
+    moreButton.click();
+    await delay(500);
+  }
+}
+
+async function clickShowTranscriptControl() {
+  const control = findShowTranscriptControl();
+  if (!control) {
+    return false;
+  }
+
+  const clickable = control.closest('button') || control.getElementsByTagName('button')[0] || control;
+  clickable.click();
+  await delay(1000);
+  return true;
+}
+
+function findShowTranscriptControl() {
+  const tagNames = ['button', 'ytd-button-renderer', 'yt-button-shape', 'tp-yt-paper-button'];
+
+  for (const tagName of tagNames) {
+    const control = findVisibleElementByText(document.getElementsByTagName(tagName), /show transcript/i);
+    if (control) {
+      return control;
+    }
+  }
+
+  return null;
+}
+
+function findVisibleElementByText(elements, pattern) {
+  return [...elements].find(element => {
+    const label = `${element.getAttribute('aria-label') || ''} ${element.textContent || ''}`;
+    return isVisibleElement(element) && pattern.test(label.trim());
   });
+}
+
+function isVisibleElement(element) {
+  if (!element) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const style = window.getComputedStyle(element);
+  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Function to call OpenRouter API for summarization
