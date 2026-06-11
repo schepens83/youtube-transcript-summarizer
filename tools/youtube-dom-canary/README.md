@@ -39,6 +39,34 @@ HEADLESS=false npm run verify
 
 The script prints the video title, selector, segment count, and a short sample when verification succeeds.
 
+If YouTube blocks anonymous automation, use a persistent Playwright profile and solve the prompt manually once:
+
+```bash
+HEADLESS=false USER_DATA_DIR=.youtube-canary-profile npm run verify
+```
+
+After the first manual run, reuse the same profile:
+
+```bash
+USER_DATA_DIR=.youtube-canary-profile npm run verify
+```
+
+Do not point `USER_DATA_DIR` at your everyday browser profile. Use a dedicated canary profile directory and keep it out of git.
+
+If YouTube blocks the browser run with `[youtube-blocked]`, run the static snapshot diagnostic:
+
+```bash
+npm run snapshot
+```
+
+To check a specific video with the snapshot diagnostic:
+
+```bash
+npm run snapshot -- "https://www.youtube.com/watch?v=Ks-_Mh1QhMc"
+```
+
+Snapshot mode downloads the static watch HTML, inspects `ytInitialPlayerResponse` for `captionTracks`, and tries to fetch one caption URL. This is a workaround diagnostic only: it can show whether caption metadata and caption text are visible without opening the transcript panel, but it does not verify the hydrated transcript DOM selector used by the extension.
+
 ## Exit Codes
 
 - `0`: selector works and returned transcript segments.
@@ -47,6 +75,8 @@ The script prints the video title, selector, segment count, and a short sample w
 - `3`: navigation, consent, bot check, or browser-level failure.
 
 Exit code `1` is the actionable selector-change case. Exit code `2` means the panel button or YouTube user flow changed, or the chosen video does not expose a transcript. Exit code `3` is usually environmental or flaky and should be retried before drawing conclusions.
+
+When `npm run verify` hits a YouTube block, it also runs the snapshot diagnostic before exiting. A `[snapshot-ok]` line means YouTube still exposed caption metadata in the initial page data. A `[snapshot-caption-ok]` line means the selected caption URL also returned text. These are not passing selector results.
 
 ## Scheduled Sandbox Routine
 
@@ -108,5 +138,12 @@ Exit code `3` categories include:
 - `consent-wall`: YouTube showed a consent screen that the canary could not dismiss.
 - `youtube-blocked`: YouTube showed a bot check, unusual-traffic page, or sign-in gate.
 - `youtube-video-unavailable`: the configured video is unavailable. Use a different transcript-bearing video URL.
+
+If the canary repeatedly reports `[youtube-blocked]`, use this decision tree:
+
+- If the output includes `[snapshot-caption-ok]`, the environment is blocked from browser automation but can still fetch captions. Do not change the DOM selector based on this result. Consider changing the extension to extract captions from `ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks` in the user's real YouTube page.
+- If the output includes `[snapshot-ok]` plus `[snapshot-caption-empty]`, YouTube exposed caption metadata but did not return caption text for the selected track in this environment. Try another known transcript-bearing video before designing a caption-track fallback around that result.
+- If the output includes `[snapshot-no-captions]` or `[snapshot-missing]`, the environment cannot see enough YouTube page data to validate transcripts. Retry later, try another known transcript-bearing video, or run the canary from a different residential/manual browser environment.
+- If `HEADLESS=false npm run verify` succeeds manually after solving a sign-in or consent challenge, the selector result from that run is the one to trust.
 
 If a selector fix is needed, keep `fetchTranscript()` returning one plain-text transcript string and keep the existing retry behavior unless the live DOM change requires otherwise. Do not modify the OpenRouter call, prompt text, modal, manifest, options page, or background worker as part of selector maintenance.

@@ -6,6 +6,7 @@
   "description": "Live YouTube transcript DOM selector verifier for youtube-transcript-summarizer.",
   "scripts": {
     "doctor": "node verify-selector.mjs --doctor",
+    "snapshot": "node verify-selector.mjs --snapshot",
     "verify": "node verify-selector.mjs"
   },
   "devDependencies": {

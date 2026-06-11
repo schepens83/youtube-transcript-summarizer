@@ -1,4 +1,3 @@
-import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
@@ -18,9 +17,11 @@ const EXIT_BROWSER_FAILURE = 3;
 
 const args = process.argv.slice(2);
 const doctorMode = args.includes('--doctor');
+const snapshotMode = args.includes('--snapshot');
 const requestedVideoUrl = args.find(arg => !arg.startsWith('--'));
 const videoUrl = normalizeWatchUrl(requestedVideoUrl || process.env.VIDEO_URL || DEFAULT_VIDEO_URL);
 const headless = process.env.HEADLESS !== 'false';
+const userDataDir = process.env.USER_DATA_DIR;
 
 main().catch(error => {
   reportBrowserFailure(error?.category || categorizeFailure(error), error?.message || String(error));
@@ -33,14 +34,13 @@ async function main() {
     await runDoctor(transcriptSelector);
     return;
   }
+  if (snapshotMode) {
+    await runSnapshotDiagnostic();
+    return;
+  }
 
-  const browser = await launchBrowser();
-  const context = await browser.newContext({
-    locale: 'en-US',
-    viewport: { width: 1365, height: 900 },
-    userAgent:
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  });
+  const browserSession = await createBrowserSession();
+  const { context } = browserSession;
 
   await seedConsentCookie(context);
 
@@ -56,6 +56,7 @@ async function main() {
 
     const blockReason = await blockedPageReason(page);
     if (blockReason) {
+      await runSnapshotDiagnostic();
       reportBrowserFailure(blockReason, youtubeBlockMessage(blockReason));
       process.exitCode = EXIT_BROWSER_FAILURE;
       return;
@@ -71,6 +72,7 @@ async function main() {
 
     const postOpenBlockReason = await blockedPageReason(page);
     if (postOpenBlockReason) {
+      await runSnapshotDiagnostic();
       reportBrowserFailure(postOpenBlockReason, youtubeBlockMessage(postOpenBlockReason));
       process.exitCode = EXIT_BROWSER_FAILURE;
       return;
@@ -95,6 +97,7 @@ async function main() {
 
     const postQueryBlockReason = await blockedPageReason(page);
     if (postQueryBlockReason) {
+      await runSnapshotDiagnostic();
       reportBrowserFailure(postQueryBlockReason, youtubeBlockMessage(postQueryBlockReason));
       process.exitCode = EXIT_BROWSER_FAILURE;
       return;
@@ -104,8 +107,82 @@ async function main() {
     await printTranscriptDomHints(page);
     process.exitCode = EXIT_SELECTOR_BROKEN;
   } finally {
-    await browser.close();
+    await browserSession.close();
   }
+}
+
+async function runSnapshotDiagnostic() {
+  console.log(`[snapshot-open] ${videoUrl}`);
+
+  try {
+    const html = await fetchWatchHtml(videoUrl);
+    const blockReason = blockedHtmlReason(html);
+    if (blockReason) {
+      console.error(`[snapshot-warning] Static watch HTML includes ${blockReason} text.`);
+    }
+
+    const playerResponse = extractJsonAssignment(html, 'ytInitialPlayerResponse');
+    if (!playerResponse) {
+      console.error('[snapshot-missing] Could not find ytInitialPlayerResponse in static watch HTML.');
+      console.error('No selector conclusion was reached.');
+      process.exitCode = snapshotMode ? EXIT_BROWSER_FAILURE : process.exitCode;
+      return;
+    }
+
+    const captionTracks =
+      playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+
+    if (captionTracks.length === 0) {
+      console.error('[snapshot-no-captions] Static watch HTML did not expose captionTracks.');
+      console.error('No selector conclusion was reached.');
+      process.exitCode = snapshotMode ? EXIT_BROWSER_FAILURE : process.exitCode;
+      return;
+    }
+
+    const title = playerResponse?.videoDetails?.title || 'unknown title';
+    const languages = captionTracks
+      .slice(0, 8)
+      .map(track => track.name?.simpleText || track.languageCode || 'unknown')
+      .join(' | ');
+
+    console.log(`[snapshot-ok] Static watch HTML exposes ${captionTracks.length} caption track(s).`);
+    console.log(`[snapshot-video] ${title}`);
+    console.log(`[snapshot-languages] ${languages}`);
+    await printCaptionFetchDiagnostic(captionTracks);
+    console.log('[snapshot-note] This confirms caption metadata is visible, but it does not verify the live transcript DOM selector.');
+  } catch (error) {
+    console.error(`[snapshot-failed] ${error?.message || String(error)}`);
+    console.error('No selector conclusion was reached.');
+    process.exitCode = snapshotMode ? EXIT_BROWSER_FAILURE : process.exitCode;
+  }
+}
+
+async function printCaptionFetchDiagnostic(captionTracks) {
+  const track =
+    captionTracks.find(candidate => candidate.languageCode === 'en' && candidate.kind !== 'asr') ||
+    captionTracks.find(candidate => candidate.languageCode === 'en') ||
+    captionTracks[0];
+
+  if (!track?.baseUrl) {
+    console.error('[snapshot-caption-missing] Selected caption track did not include a baseUrl.');
+    return;
+  }
+
+  for (const suffix of ['', '&fmt=srv3', '&fmt=json3']) {
+    const body = await fetchWatchHtml(`${track.baseUrl}${suffix}`);
+    const text = body.replace(/\s+/g, ' ').trim();
+    if (text.length > 0) {
+      console.log(
+        `[snapshot-caption-ok] ${track.name?.simpleText || track.languageCode || 'selected track'} returned ${text.length} characters with ${suffix || 'default format'}.`,
+      );
+      console.log(`[snapshot-caption-sample] ${text.slice(0, 160)}`);
+      return;
+    }
+  }
+
+  console.error(
+    `[snapshot-caption-empty] ${track.name?.simpleText || track.languageCode || 'Selected caption track'} URLs returned empty bodies.`,
+  );
 }
 
 async function runDoctor(transcriptSelector) {
@@ -125,11 +202,45 @@ async function runDoctor(transcriptSelector) {
 
 async function launchBrowser() {
   try {
+    const { chromium } = await import('playwright');
     return await chromium.launch({ headless });
   } catch (error) {
     reportBrowserFailure(categorizeFailure(error), error?.message || String(error));
     process.exit(EXIT_BROWSER_FAILURE);
   }
+}
+
+async function createBrowserSession() {
+  const options = {
+    locale: 'en-US',
+    viewport: { width: 1365, height: 900 },
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  };
+
+  if (userDataDir) {
+    try {
+      const { chromium } = await import('playwright');
+      const context = await chromium.launchPersistentContext(userDataDir, {
+        ...options,
+        headless,
+      });
+      return {
+        context,
+        close: () => context.close(),
+      };
+    } catch (error) {
+      reportBrowserFailure(categorizeFailure(error), error?.message || String(error));
+      process.exit(EXIT_BROWSER_FAILURE);
+    }
+  }
+
+  const browser = await launchBrowser();
+  const context = await browser.newContext(options);
+  return {
+    context,
+    close: () => browser.close(),
+  };
 }
 
 async function navigateToVideo(page) {
@@ -377,6 +488,110 @@ function checkYoutubeHttps() {
       reject(error);
     });
   });
+}
+
+function fetchWatchHtml(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        timeout: 20_000,
+        headers: {
+          'accept-language': 'en-US,en;q=0.9',
+          cookie: 'SOCS=CAI',
+          'user-agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        },
+      },
+      response => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          response.resume();
+          resolve(fetchWatchHtml(new URL(response.headers.location, url).toString()));
+          return;
+        }
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          response.resume();
+          reject(new Error(`YouTube returned HTTP ${response.statusCode}`));
+          return;
+        }
+
+        response.setEncoding('utf8');
+        let body = '';
+        response.on('data', chunk => {
+          body += chunk;
+        });
+        response.on('end', () => resolve(body));
+      },
+    );
+
+    request.on('timeout', () => {
+      request.destroy(new Error('Timed out fetching static watch HTML'));
+    });
+
+    request.on('error', reject);
+  });
+}
+
+function blockedHtmlReason(html) {
+  if (/before you continue to youtube|accept all|reject all|manage options/i.test(html)) {
+    return 'consent-wall';
+  }
+  if (/sign in to confirm|unusual traffic|not a bot|captcha/i.test(html)) {
+    return 'youtube-blocked';
+  }
+  if (/video unavailable/i.test(html)) {
+    return 'youtube-video-unavailable';
+  }
+  return null;
+}
+
+function extractJsonAssignment(html, variableName) {
+  const assignmentIndex = html.indexOf(variableName);
+  if (assignmentIndex === -1) {
+    return null;
+  }
+
+  const objectStart = html.indexOf('{', assignmentIndex);
+  if (objectStart === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = objectStart; index < html.length; index += 1) {
+    const character = html[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(html.slice(objectStart, index + 1));
+      }
+    }
+  }
+
+  return null;
 }
 
 function categorizeFailure(error) {
