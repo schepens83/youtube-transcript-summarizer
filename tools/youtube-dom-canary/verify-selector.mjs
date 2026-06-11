@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import https from 'node:https';
 import path from 'node:path';
 
-const DEFAULT_VIDEO_URL = 'https://www.youtube.com/watch?v=Ks-_Mh1QhMc';
+const DEFAULT_VIDEO_URL = 'https://www.youtube.com/watch?v=v1wZwxY3CMg';
 const MAX_RETRIES = 10;
 const RETRY_DELAY_MS = 500;
 const CONTENT_SCRIPT_PATH = path.resolve(

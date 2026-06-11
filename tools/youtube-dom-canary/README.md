@@ -5,7 +5,7 @@ This is an isolated Playwright tool for verifying the live YouTube transcript DO
 The extension currently extracts transcript text in `../../content.js` with:
 
 ```js
-document.querySelectorAll('ytd-transcript-segment-renderer .segment-text')
+document.querySelectorAll('ytd-transcript-segment-renderer .segment-text, transcript-segment-view-model span[role=text]')
 ```
 
 This tool reads the selector from `content.js`, opens a real YouTube watch page, opens the transcript panel through the page UI, and checks that selector with the same retry timing as `content.js`: 10 attempts spaced 500ms apart.
@@ -28,7 +28,7 @@ npm run verify
 To verify a specific video:
 
 ```bash
-npm run verify -- "https://www.youtube.com/watch?v=Ks-_Mh1QhMc"
+npm run verify -- "https://www.youtube.com/watch?v=v1wZwxY3CMg"
 ```
 
 For visible browser debugging:
@@ -62,7 +62,7 @@ npm run snapshot
 To check a specific video with the snapshot diagnostic:
 
 ```bash
-npm run snapshot -- "https://www.youtube.com/watch?v=Ks-_Mh1QhMc"
+npm run snapshot -- "https://www.youtube.com/watch?v=v1wZwxY3CMg"
 ```
 
 Snapshot mode downloads the static watch HTML, inspects `ytInitialPlayerResponse` for `captionTracks`, and tries to fetch one caption URL. This is a workaround diagnostic only: it can show whether caption metadata and caption text are visible without opening the transcript panel, but it does not verify the hydrated transcript DOM selector used by the extension.

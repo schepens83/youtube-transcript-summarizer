@@ -22,9 +22,8 @@ async function fetchTranscript() {
     let retries = 0;
 
     const extractText = () => {
-      // Look for the segments container, which holds all transcript segments.
-      // The segments themselves are within ytd-transcript-segment-renderer elements.
-      const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer .segment-text');
+      // Support both the older Polymer transcript DOM and YouTube's newer view-model transcript DOM.
+      const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer .segment-text, transcript-segment-view-model span[role=text]');
 
       if (transcriptSegments.length > 0) {
         let fullTranscript = "";
